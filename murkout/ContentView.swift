@@ -300,6 +300,20 @@ struct TemplateDetailView: View {
                                         }
                                     }
                                 }
+                                Button(action: {
+                                    if let lastSet = sets.last {
+                                        let newSet = WorkoutSet(
+                                            exercise: lastSet.exercise,
+                                            weight: lastSet.weight,
+                                            reps: lastSet.reps
+                                        )
+                                        store.templates[templateIndex].sets.append(newSet)
+                                    }
+                                }) {
+                                    Label("Add Another \(exercise.name) Set", systemImage: "plus.circle")
+                                }
+                                .buttonStyle(.bordered)
+                                .padding(.top, 4)
                             }
                         }
                     }
