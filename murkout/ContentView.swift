@@ -55,6 +55,99 @@ struct WorkoutSession: Identifiable, Hashable {
     }
 }
 
+struct ExerciseSetList: View {
+    @EnvironmentObject var store: WorkoutStore
+    var exercise: Exercise
+    var sets: [WorkoutSet]        // local list for this exercise section
+    var session: WorkoutSession   // session we're editing
+
+    var body: some View {
+        // Find the session index once
+        if let sessionIndex = store.sessions.firstIndex(where: { $0.id == session.id }) {
+            // Display the sets (local indices are relative to `sets`)
+            ForEach(Array(sets.enumerated()), id: \.element.id) { localIndex, set in
+                // Find the corresponding index in the global session array
+                if let globalIndex = store.sessions[sessionIndex].sets.firstIndex(where: { $0.id == set.id }) {
+                    HStack {
+                        Text("Set \(localIndex + 1)")
+                            .frame(width: 60, alignment: .leading)
+
+                        // Bindings into the global session array element
+                        TextField(
+                            "Weight",
+                            value: $store.sessions[sessionIndex].sets[globalIndex].weight,
+                            formatter: NumberFormatter()
+                        )
+                        .keyboardType(.decimalPad)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .frame(width: 70)
+
+                        Text("kg")
+
+                        TextField(
+                            "Reps",
+                            value: $store.sessions[sessionIndex].sets[globalIndex].reps,
+                            formatter: NumberFormatter()
+                        )
+                        .keyboardType(.numberPad)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .frame(width: 60)
+
+                        Text("reps")
+                    }
+                    .padding(.vertical, 6)
+                } else {
+                    // Fallback: if for some reason the set can't be found globally, show a simple row
+                    HStack {
+                        Text("Set \(localIndex + 1)")
+                        Spacer()
+                        Text("\(set.weight, specifier: "%.1f") kg × \(set.reps)")
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            // Swipe-to-delete handler. indexSet are local indices into `sets`.
+            .onDelete { indexSet in
+                // Convert local indices to the set IDs to remove
+                let idsToRemove: [UUID] = indexSet.compactMap { localIndex in
+                    guard localIndex < sets.count else { return nil }
+                    return sets[localIndex].id
+                }
+
+                // Remove each matching set from the global session array
+                for id in idsToRemove {
+                    if let gi = store.sessions[sessionIndex].sets.firstIndex(where: { $0.id == id }) {
+                        store.sessions[sessionIndex].sets.remove(at: gi)
+                    }
+                }
+            }
+
+            // Quick add: duplicate last set of this exercise in the session
+            Button {
+                if let lastSet = sets.last {
+                    let newSet = WorkoutSet(
+                        exercise: lastSet.exercise,
+                        weight: lastSet.weight,
+                        reps: lastSet.reps
+                    )
+                    store.sessions[sessionIndex].sets.append(newSet)
+                }
+            } label: {
+                Label("Add Set", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(.bordered)
+            .padding(.top, 6)
+        } else {
+            // Session not found in store (shouldn't happen normally)
+            Text("Session not available")
+                .foregroundColor(.secondary)
+        }
+    }
+}
+
+
+
+
 
 
 
@@ -241,9 +334,6 @@ struct TemplateDetailView: View {
         VStack {
             // Fetch the latest template from the store
             let currentTemplate = store.templates.first(where: { $0.id == template.id }) ?? template
-            let weight = 0;
-            let reps = 0;
-
             if currentTemplate.sets.isEmpty {
                 VStack(spacing: 20) {
                     Text("This template has no exercises yet.")
@@ -334,6 +424,7 @@ struct TemplateDetailView: View {
                     Spacer()
                     Button("Start Workout") {
                         let newSession = store.startSessionAndReturn(from: currentTemplate)
+                        navigationPath.removeLast(navigationPath.count)
                         navigationPath.append(newSession)
                     }
                 }
@@ -380,59 +471,46 @@ struct SessionView: View {
 
 struct WorkoutDetailView: View {
     @EnvironmentObject var store: WorkoutStore
-    @Environment(\.dismiss) var dismiss
     @Binding var navigationPath: NavigationPath
     var session: WorkoutSession
-    
+
     var body: some View {
         VStack {
-            Text(session.template.name)
-                .font(.title2)
-                .padding()
-            
+            let currentSession = store.sessions.first(where: { $0.id == session.id }) ?? session
+
             List {
-                ForEach(session.template.sets) { set in
-                    HStack {
-                        Text(set.exercise.name)
-                        Spacer()
-                        Text("\(set.weight, specifier: "%.1f") kg x \(set.reps)")
+                ForEach(groupedExercises(for: currentSession), id: \.0) { exercise, sets in
+                    Section(header: Text(exercise.name).font(.headline)) {
+                        ExerciseSetList(
+                            exercise: exercise,
+                            sets: sets,
+                            session: currentSession
+                        )
+                        .environmentObject(store)
                     }
                 }
             }
             
-            Button("Finish Session") {
-                if hasIncompleteSets(session) {
-                    confirmFinishSession(session)
-                } else {
-                    completeSession(session)
+            Button("Finish Workout") {
+                if let sessionIndex = store.sessions.firstIndex(where: { $0.id == session.id }) {
+                    store.sessions[sessionIndex].endTime = Date()
+
+                    // ✅ Navigate back to main page
+                    navigationPath.removeLast(navigationPath.count)
                 }
             }
-            .buttonStyle(.borderedProminent)
             .padding()
+            .buttonStyle(.borderedProminent)
         }
         .navigationTitle("Session")
     }
     
-    private func hasIncompleteSets(_ session: WorkoutSession) -> Bool {
-        // stub: replace with your own set completion logic
-        return false
-    }
-    
-    private func confirmFinishSession(_ session: WorkoutSession) {
-        // Simplified inline confirmation for now
-        if let index = store.sessions.firstIndex(where: { $0.id == session.id }) {
-            store.finishSession(store.sessions[index])
-            navigationPath.removeLast(navigationPath.count) // return to home
-        }
-    }
-    
-    private func completeSession(_ session: WorkoutSession) {
-        if let index = store.sessions.firstIndex(where: { $0.id == session.id }) {
-            store.finishSession(store.sessions[index])
-            navigationPath.removeLast(navigationPath.count) // return to home
-        }
+    private func groupedExercises(for session: WorkoutSession) -> [(Exercise, [WorkoutSet])] {
+        let dict = Dictionary(grouping: session.sets, by: { $0.exercise })
+        return dict.sorted { $0.key.name < $1.key.name }
     }
 }
+
 
 
 struct AddSetView: View {
